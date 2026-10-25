@@ -2,8 +2,9 @@
 
 ## Motor ve Araçlar
 
-- **Oyun motoru:** Unreal Engine (_sürüm belirlenecek_)
-- **Programlama dili:** C++ ve Blueprint
+- **Oyun motoru:** Unreal Engine 5 (_alt sürüm belirlenecek_)
+- **Programlama dili:** C++ ve Blueprints
+- **Mimari:** Sunucu otoriter çok oyunculu
 - **Sürüm kontrolü:** Git + GitHub
 
 ## Büyük Dosyalar
