@@ -1,0 +1,61 @@
+# ---------------------------------------------
+# Unreal Engine
+# ---------------------------------------------
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+
+# Derlenmiş shader ve önbellek dosyaları
+*.ddc
+*.pdb
+*.ilk
+*.exp
+
+# ---------------------------------------------
+# IDE / Proje dosyaları (Unreal tarafından yeniden üretilir)
+# ---------------------------------------------
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vs/
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.code-workspace
+
+# ---------------------------------------------
+# Derleme çıktıları
+# ---------------------------------------------
+*.obj
+*.o
+*.dll
+*.dylib
+*.so
+*.lib
+*.a
+*.exe
+*.app
+
+# ---------------------------------------------
+# İşletim sistemi dosyaları
+# ---------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# ---------------------------------------------
+# Diğer
+# ---------------------------------------------
+*.log
+*.tmp
+*.bak
