@@ -10,6 +10,9 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "Net/UnrealNetwork.h"
 #include "WARFRONT.h"
 
 AWARFRONTCharacter::AWARFRONTCharacter()
@@ -46,8 +49,45 @@ AWARFRONTCharacter::AWARFRONTCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
+	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character)
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+
+	// Tick drives the camera blend
+	PrimaryActorTick.bCanEverTick = true;
+
+	DefaultToggleCameraKey = EKeys::V;
+}
+
+void AWARFRONTCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// capture the third person setup after blueprint defaults so overrides are respected
+	ThirdPersonArmLength = CameraBoom->TargetArmLength;
+	ThirdPersonBoomLocation = CameraBoom->GetRelativeLocation();
+	ThirdPersonSocketOffset = CameraBoom->SocketOffset;
+	ThirdPersonTargetOffset = CameraBoom->TargetOffset;
+	bThirdPersonOrientRotationToMovement = GetCharacterMovement()->bOrientRotationToMovement;
+	bThirdPersonUseControllerRotationYaw = bUseControllerRotationYaw;
+}
+
+void AWARFRONTCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	// the owner applies its own camera mode immediately
+	DOREPLIFETIME_CONDITION(AWARFRONTCharacter, CameraMode, COND_SkipOwner);
+}
+
+void AWARFRONTCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	// only the owning player has a camera to blend
+	if (IsLocallyControlled())
+	{
+		UpdateCameraBlend(DeltaTime);
+	}
 }
 
 void AWARFRONTCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -65,6 +105,14 @@ void AWARFRONTCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AWARFRONTCharacter::Look);
+
+		// Camera perspective
+		UInputAction* CameraAction = ToggleCameraAction ? ToggleCameraAction : CreateDefaultToggleCameraInput();
+
+		if (CameraAction)
+		{
+			EnhancedInputComponent->BindAction(CameraAction, ETriggerEvent::Started, this, &AWARFRONTCharacter::ToggleCameraMode);
+		}
 	}
 	else
 	{
@@ -130,4 +178,129 @@ void AWARFRONTCharacter::DoJumpEnd()
 {
 	// signal the character to stop jumping
 	StopJumping();
+}
+
+UInputAction* AWARFRONTCharacter::CreateDefaultToggleCameraInput()
+{
+	const APlayerController* PlayerController = Cast<APlayerController>(GetController());
+
+	if (!PlayerController)
+	{
+		return nullptr;
+	}
+
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer());
+
+	if (!Subsystem)
+	{
+		return nullptr;
+	}
+
+	// create the action and its mapping once
+	if (!RuntimeToggleCameraAction)
+	{
+		RuntimeToggleCameraAction = NewObject<UInputAction>(this, TEXT("IA_ToggleCamera"));
+
+		RuntimeCameraMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_Camera"));
+		RuntimeCameraMappingContext->MapKey(RuntimeToggleCameraAction, DefaultToggleCameraKey);
+	}
+
+	// higher priority than the template contexts
+	Subsystem->AddMappingContext(RuntimeCameraMappingContext, 1);
+
+	return RuntimeToggleCameraAction;
+}
+
+void AWARFRONTCharacter::ToggleCameraMode()
+{
+	SetCameraMode(IsFirstPerson() ? EWARFRONTCameraMode::ThirdPerson : EWARFRONTCameraMode::FirstPerson);
+}
+
+void AWARFRONTCharacter::SetCameraMode(EWARFRONTCameraMode NewMode)
+{
+	if (CameraMode == NewMode)
+	{
+		return;
+	}
+
+	// apply locally right away, then let the server replicate it to other players
+	CameraMode = NewMode;
+	ApplyCameraModeRotationSettings();
+
+	if (!HasAuthority())
+	{
+		ServerSetCameraMode(NewMode);
+	}
+}
+
+void AWARFRONTCharacter::ServerSetCameraMode_Implementation(EWARFRONTCameraMode NewMode)
+{
+	SetCameraMode(NewMode);
+}
+
+void AWARFRONTCharacter::OnRep_CameraMode()
+{
+	ApplyCameraModeRotationSettings();
+}
+
+void AWARFRONTCharacter::ApplyCameraModeRotationSettings()
+{
+	if (IsFirstPerson())
+	{
+		// the body faces where the camera looks
+		bUseControllerRotationYaw = true;
+		GetCharacterMovement()->bOrientRotationToMovement = false;
+	}
+	else
+	{
+		// restore the template orbit behavior
+		bUseControllerRotationYaw = bThirdPersonUseControllerRotationYaw;
+		GetCharacterMovement()->bOrientRotationToMovement = bThirdPersonOrientRotationToMovement;
+	}
+}
+
+void AWARFRONTCharacter::UpdateCameraBlend(float DeltaTime)
+{
+	const float TargetAlpha = IsFirstPerson() ? 1.0f : 0.0f;
+
+	if (CameraBlendAlpha == TargetAlpha)
+	{
+		return;
+	}
+
+	// ease towards the target and snap when close enough
+	CameraBlendAlpha = FMath::FInterpTo(CameraBlendAlpha, TargetAlpha, DeltaTime, CameraBlendSpeed);
+
+	if (FMath::IsNearlyEqual(CameraBlendAlpha, TargetAlpha, 0.001f))
+	{
+		CameraBlendAlpha = TargetAlpha;
+	}
+
+	CameraBoom->TargetArmLength = FMath::Lerp(ThirdPersonArmLength, 0.0f, CameraBlendAlpha);
+	CameraBoom->SetRelativeLocation(FMath::Lerp(ThirdPersonBoomLocation, FirstPersonCameraOffset, CameraBlendAlpha));
+	CameraBoom->SocketOffset = FMath::Lerp(ThirdPersonSocketOffset, FVector::ZeroVector, CameraBlendAlpha);
+	CameraBoom->TargetOffset = FMath::Lerp(ThirdPersonTargetOffset, FVector::ZeroVector, CameraBlendAlpha);
+
+	// hide the head only once the camera is almost inside it
+	SetHeadHidden(IsFirstPerson() && CameraBlendAlpha > 0.9f);
+}
+
+void AWARFRONTCharacter::SetHeadHidden(bool bHidden)
+{
+	if (bHeadHidden == bHidden || GetMesh()->GetBoneIndex(HeadBoneName) == INDEX_NONE)
+	{
+		return;
+	}
+
+	// each machine has its own mesh, so this only affects the owning player's view
+	if (bHidden)
+	{
+		GetMesh()->HideBoneByName(HeadBoneName, EPhysBodyOp::PBO_None);
+	}
+	else
+	{
+		GetMesh()->UnHideBoneByName(HeadBoneName);
+	}
+
+	bHeadHidden = bHidden;
 }
